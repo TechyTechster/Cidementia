@@ -1,0 +1,10 @@
+identifier: cidr.techyt.cidementia
+name: Cidementia
+description: Restores last played song on launch.
+version: 1.0.0
+pluginKitVersion: 4.0.0
+author: TechyTechster
+repo: ""
+entry:
+  plugin.js:
+    type: main
