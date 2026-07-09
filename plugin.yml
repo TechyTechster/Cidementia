@@ -4,7 +4,7 @@ description: Restores last played song on launch.
 version: 1.0.0
 pluginKitVersion: 4.0.0
 author: TechyTechster
-repo: ""
+repo: "https://github.com/TechyTechster/Cidementia.git"
 entry:
   plugin.js:
     type: main

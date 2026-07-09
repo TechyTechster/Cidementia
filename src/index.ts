@@ -1,8 +1,14 @@
 import {
   definePluginContext,
   subscribeEvent,
-  saveConfig,
 } from "@ciderapp/pluginkit";
+
+// Persist to our own localStorage key instead of Cider's saveConfig().
+// saveConfig() writes Cider's reactive config store, which re-runs a watcher
+// that re-checks the queue/crossfade every call — that's the "next:waiting"
+// spam. localStorage is native, synchronous, per-origin persistent, and pokes
+// nothing. ponytail: no fs, no new dep.
+const LS_KEY = "cidementia:last";
 
 const { plugin, setupConfig } = definePluginContext({
   name: "Cidementia",
@@ -20,16 +26,27 @@ const { plugin, setupConfig } = definePluginContext({
       position: 0,
     });
 
+
+    try {
+      const saved = localStorage.getItem(LS_KEY);
+      if (saved) cfg.value = { ...cfg.value, ...JSON.parse(saved) };
+    } catch {}
+
+    const persist = () => {
+      try {
+        localStorage.setItem(LS_KEY, JSON.stringify(cfg.value));
+      } catch {}
+    };
+
     const store = (globalThis as any).__PLUGINSYS__?.Stores?.appleMusicStore;
-    if (!store?.audioElement) {
-      console.warn("[cidementia] appleMusicStore.audioElement missing");
-      return;
-    }
+    if (!store?.audioElement) return;
     const audio: HTMLAudioElement = store.audioElement;
 
     let holding = false;
+    let lastSave = 0;
+    let lastPos = -1;
 
-    const capture = () => {
+    const capture = (force = false) => {
       if (holding) return;
       const ctx: any = store.queueSourceContext;
       if (!ctx?.collectionId) return;
@@ -41,34 +58,32 @@ const { plugin, setupConfig } = definePluginContext({
       cfg.value.currentId = String((store.nowPlayingItem as any)?.id ?? "");
       cfg.value.index = store.queuePosition ?? 0;
       cfg.value.position = store.currentTime ?? audio.currentTime ?? 0;
+
+      const now = Date.now();
+      const pos = cfg.value.position;
+      if (force || (pos !== lastPos && now - lastSave >= 2000)) {
+        lastSave = now;
+        lastPos = pos;
+        persist();
+      }
     };
 
-    audio.addEventListener("timeupdate", capture);
-    audio.addEventListener("pause", capture);
-    window.addEventListener("beforeunload", () => {
-      capture();
-      void saveConfig();
-    });
+    audio.addEventListener("timeupdate", () => capture());
+    audio.addEventListener("pause", () => capture(true));
+    window.addEventListener("beforeunload", () => capture(true));
 
     let restored = false;
     const restore = async () => {
       if (restored) return;
       const src = cfg.value.source;
-      if (!src?.id) {
-        console.log("[cidementia] nothing saved to restore");
-        return;
-      }
-      if (store.nowPlayingItem) {
-        console.log("[cidementia] host already has a now-playing item");
-        return;
-      }
+      if (!src?.id) return;
+      if (store.nowPlayingItem) return;
       restored = true;
       holding = true;
 
       const target = cfg.value.position || 0;
       const expectedId = String(cfg.value.currentId || "");
       const type = src.type.endsWith("s") ? src.type : `${src.type}s`;
-      console.log(`[cidementia] restoring from ${src.type} "${src.name}" @ ${target}s`);
 
       let aborted = false;
       const wasMuted = audio.muted;
@@ -81,7 +96,6 @@ const { plugin, setupConfig } = definePluginContext({
       const onGesture = () => {
         if (aborted) return;
         aborted = true;
-        console.log("[cidementia] user interacted - aborting restore");
         cleanup();
       };
       const cleanup = () => {
@@ -106,14 +120,11 @@ const { plugin, setupConfig } = definePluginContext({
           await store.authorize?.();
           await store.setQueueFromCollection({ id: src.id, type });
           ok = (store.queue?.length ?? 0) > 0;
-        } catch (e) {
-          console.warn(`[cidementia] setQueue attempt ${attempt + 1} failed`, e);
-        }
+        } catch {}
         if (!ok) await new Promise((r) => setTimeout(r, 2000));
       }
       if (aborted) return;
       if (!ok) {
-        console.warn("[cidementia] restore gave up building queue");
         restored = false;
         cleanup();
         return;
@@ -130,9 +141,7 @@ const { plugin, setupConfig } = definePluginContext({
 
       try {
         await store.jumpToQueuePosition(jumpIdx);
-      } catch (e) {
-        console.warn("[cidementia] jumpToQueuePosition failed", e);
-      }
+      } catch {}
       if (aborted) return;
 
       const atTarget = () =>
@@ -160,7 +169,6 @@ const { plugin, setupConfig } = definePluginContext({
             } catch {}
           }
           if (tries >= 100) {
-            console.warn("[cidementia] item never loaded into now-playing");
             clearInterval(timer);
             finish();
           }
@@ -183,11 +191,7 @@ const { plugin, setupConfig } = definePluginContext({
 
         stable = audio.paused && atTarget() ? stable + 1 : 0;
 
-        if (stable >= 5) {
-          clearInterval(timer);
-          finish();
-        } else if (tries >= 100) {
-          console.warn("[cidementia] hold gave up at", audio.currentTime, "target", target);
+        if (stable >= 5 || tries >= 100) {
           clearInterval(timer);
           finish();
         }
@@ -195,31 +199,7 @@ const { plugin, setupConfig } = definePluginContext({
 
       function finish() {
         if (aborted) return;
-        console.log("[cidementia] settled, paused at", audio.currentTime);
-        const guardUntil = Date.now() + 6000;
-        const onPlay = () => {
-          const cur = audio.currentTime || 0;
-          const userResumed = target < 1 || cur > Math.max(2, target - 3);
-          if (aborted || hijacked() || Date.now() > guardUntil || userResumed) {
-            audio.removeEventListener("play", onPlay);
-            cleanup();
-            return;
-          }
-          store.pause();
-          if (target >= 1) {
-            try {
-              store.seekTo(target);
-            } catch {}
-            try {
-              audio.currentTime = target;
-            } catch {}
-          }
-        };
-        audio.addEventListener("play", onPlay);
-        setTimeout(() => {
-          audio.removeEventListener("play", onPlay);
-          cleanup();
-        }, 6500);
+        cleanup();
       }
     };
 

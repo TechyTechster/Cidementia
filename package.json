@@ -11,7 +11,8 @@
   },
   "scripts": {
     "build": "vite build",
-    "dev": "vite build --watch"
+    "dev": "vite build --watch",
+    "publish": "tsx ./scripts/market-pack.cts"
   },
   "dependencies": {
     "@ciderapp/pluginkit": "file:../PluginKit"
