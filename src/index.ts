@@ -3,11 +3,6 @@ import {
   subscribeEvent,
 } from "@ciderapp/pluginkit";
 
-// Persist to our own localStorage key instead of Cider's saveConfig().
-// saveConfig() writes Cider's reactive config store, which re-runs a watcher
-// that re-checks the queue/crossfade every call — that's the "next:waiting"
-// spam. localStorage is native, synchronous, per-origin persistent, and pokes
-// nothing. ponytail: no fs, no new dep.
 const LS_KEY = "cidementia:last";
 
 const { plugin, setupConfig } = definePluginContext({
